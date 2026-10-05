@@ -3899,10 +3899,13 @@ var addDownloadJobEpic = (action$, store$, { loader, parser, fs }) => action$.pi
 		const [videoFragments, audioFragments, subtitleText] = await Promise.all([
 			getFragmentsDetailsFactory(loader, parser)(videoLevel, fetchAttempts, { baseUri }),
 			audioLevel ? getFragmentsDetailsFactory(loader, parser)(audioLevel, fetchAttempts, { baseUri }) : Promise.resolve([]),
-			subtitleLevel ? getSubtitleTextFactory(loader, parser)(subtitleLevel, fetchAttempts, { baseUri }) : Promise.resolve(null)
+			subtitleLevel ? Promise.race([getSubtitleTextFactory(loader, parser)(subtitleLevel, Math.min(fetchAttempts, 3), { baseUri }), new Promise((_, reject) => setTimeout(() => reject(new Error("Subtitle fetch timed out")), 2e4))]).catch((error) => {
+				console.warn("[add-download-job] subtitle skipped:", error?.message);
+				return null;
+			}) : Promise.resolve(null)
 		]);
 		const configuredContainer = store$.value.config.outputContainer ?? "mp4";
-		const container = subtitleLevel ? "mkv" : configuredContainer;
+		const container = subtitleLevel && subtitleText !== null && subtitleText !== void 0 ? "mkv" : configuredContainer;
 		const actions = [jobsSlice.actions.add({ job: {
 			id: jobId,
 			playlistId: playlist.id,
@@ -6017,7 +6020,7 @@ async function fetchWithRetry(fetchFn, attempts = 1) {
 		if (isHttpError(e)) throw e;
 		if (countdown > 0) {
 			await new Promise((resolve) => setTimeout(resolve, retryTime));
-			retryTime *= 1.15;
+			retryTime = Math.min(retryTime * 1.15, 3e3);
 		}
 	}
 	if (lastError instanceof Error) throw lastError;
