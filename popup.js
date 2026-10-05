@@ -60729,13 +60729,18 @@ var usePlaylistController = ({ id }) => {
 			const list = Object.values(state.levels.levels).flatMap((f) => f ? [f] : []).filter((l) => l?.playlistID === id);
 			list.sort((a, b) => b?.bitrate - a?.bitrate);
 			return list;
-		}),
+		}, shallowEqual),
 		downloadLevel: (0, import_react.useCallback)((levelId, audioLevelID, subtitleLevelID) => {
-			dispatch(levelsSlice.actions.download({
+			console.log("[hls-debug] popup dispatch levels/download", {
+				levelId,
+				audioLevelID,
+				subtitleLevelID
+			});
+			Promise.resolve(dispatch(levelsSlice.actions.download({
 				levelID: levelId,
 				audioLevelID,
 				subtitleLevelID
-			}));
+			}))).then(() => console.log("[hls-debug] background acknowledged levels/download"), (error) => console.warn("[hls-debug] levels/download dispatch failed", error));
 			setTab(TabOptions.DOWNLOADS);
 		}, [dispatch, setTab]),
 		inspections,
@@ -60800,6 +60805,7 @@ var PlaylistModule = ({ id, onBack }) => {
 	const [videoId, setVideoId] = (0, import_react.useState)();
 	const [audioId, setAudioId] = (0, import_react.useState)();
 	const [subtitleId, setSubtitleId] = (0, import_react.useState)("");
+	const autoSubtitleAppliedRef = (0, import_react.useRef)(false);
 	const levelDurations = useSelector((state) => state.levels.durations);
 	const videoLevels = (0, import_react.useMemo)(() => levels.filter((l) => l.type === "stream"), [levels]);
 	const audioLevels = (0, import_react.useMemo)(() => levels.filter((l) => l.type === "audio"), [levels]);
@@ -60834,8 +60840,9 @@ var PlaylistModule = ({ id, onBack }) => {
 	]);
 	(0, import_react.useEffect)(() => {
 		if (subtitleLevels.length > 0) {
-			const autoSubtitleId = storedSubtitleId === void 0 ? selectPreferredSubtitleLevel(subtitleLevels, preferredSubtitleLanguage) : void 0;
+			const autoSubtitleId = storedSubtitleId === void 0 && !autoSubtitleAppliedRef.current ? selectPreferredSubtitleLevel(subtitleLevels, preferredSubtitleLanguage) : void 0;
 			if (autoSubtitleId) {
+				autoSubtitleAppliedRef.current = true;
 				setSubtitleId(autoSubtitleId);
 				setSubtitlePreference(autoSubtitleId);
 			} else if (storedSubtitleId !== void 0 && subtitleLevels.some((s) => s.id === storedSubtitleId)) setSubtitleId(storedSubtitleId);
@@ -60850,14 +60857,14 @@ var PlaylistModule = ({ id, onBack }) => {
 		setSubtitlePreference
 	]);
 	(0, import_react.useEffect)(() => {
-		if (videoId && inspections.status[videoId] !== "pending" && !inspections.inspections[videoId]) inspectLevel(videoId);
+		if (videoId && inspections.status[videoId] === void 0 && !inspections.inspections[videoId]) inspectLevel(videoId);
 	}, [
 		videoId,
 		inspectLevel,
 		inspections
 	]);
 	(0, import_react.useEffect)(() => {
-		if (audioId && inspections.status[audioId] !== "pending" && !inspections.inspections[audioId]) inspectLevel(audioId);
+		if (audioId && inspections.status[audioId] === void 0 && !inspections.inspections[audioId]) inspectLevel(audioId);
 	}, [
 		audioId,
 		inspectLevel,
@@ -60910,6 +60917,14 @@ var PlaylistModule = ({ id, onBack }) => {
 	const encryptionBlocked = encryptionSummaries.some((summary) => summary.supported === false);
 	const canDownload = hasMedia && (!requiresVideo || !!videoId) && (!requiresAudio || !!audioId) && !encryptionBlocked && !inspectionPending;
 	function onDownload() {
+		console.log("[hls-debug] Start download clicked", {
+			canDownload,
+			videoId,
+			audioId,
+			subtitleId,
+			inspectionPending,
+			encryptionBlocked
+		});
 		if (!canDownload) return;
 		downloadLevel(videoId ?? audioId, requiresAudio ? audioId : void 0, subtitleId || void 0);
 	}

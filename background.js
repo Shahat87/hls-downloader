@@ -3868,8 +3868,18 @@ var downloadJobEpic = (action$, store$, { fs, loader, decryptor }) => action$.pi
 	return from(createBucketFactory(fs)(jobId, videoFragments.length, audioFragments.length).then(() => ({
 		fragments,
 		jobId
-	})));
-}), mergeMap(({ fragments, jobId }) => from(fragments).pipe(mergeMap((fragment) => from(downloadSingleFactory(loader)(fragment, store$.value.config.fetchAttempts).then((data) => ({
+	}))).pipe(catchError((error) => {
+		console.warn("[hls-debug] createBucket failed", jobId, error);
+		return of({
+			fragments: [],
+			jobId,
+			error
+		});
+	}));
+}), mergeMap(({ fragments, jobId, error }) => error ? of(jobsSlice.actions.downloadFailed({
+	jobId,
+	message: error?.message || "Failed to create download storage"
+})) : from(fragments).pipe(mergeMap((fragment) => from(downloadSingleFactory(loader)(fragment, store$.value.config.fetchAttempts).then((data) => ({
 	fragment,
 	data,
 	jobId
@@ -3883,23 +3893,70 @@ var downloadJobEpic = (action$, store$, { fs, loader, decryptor }) => action$.pi
 }))))));
 //#endregion
 //#region ../core/lib/controllers/add-download-job-epic.js
+var withTimeout = (promise, ms, message) => new Promise((resolve, reject) => {
+	const timer = setTimeout(() => reject(new Error(message)), ms);
+	promise.then((value) => {
+		clearTimeout(timer);
+		resolve(value);
+	}, (error) => {
+		clearTimeout(timer);
+		reject(error);
+	});
+});
+var failedDownloadJobActions = (jobId, playlist, videoLevel, message) => {
+	console.warn("[hls-debug] add-download-job failed", {
+		jobId,
+		message
+	});
+	return of(jobsSlice.actions.add({ job: {
+		id: jobId,
+		playlistId: playlist?.id ?? videoLevel?.playlistID ?? "",
+		videoFragments: [],
+		audioFragments: [],
+		filename: playlist && videoLevel ? generateFileName()(playlist, videoLevel) : "download",
+		createdAt: Date.now(),
+		prepareFailed: true
+	} }), jobsSlice.actions.downloadFailed({
+		jobId,
+		message: `${message} (press Start download again)`
+	}));
+};
 var addDownloadJobEpic = (action$, store$, { loader, parser, fs }) => action$.pipe(filter(levelsSlice.actions.download.match), map((action) => action.payload), mergeMap(({ levelID, audioLevelID, subtitleLevelID }) => {
 	const jobId = crypto?.randomUUID?.() ?? `job-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 	const videoLevel = store$.value.levels.levels[levelID];
 	const audioLevel = audioLevelID ? store$.value.levels.levels[audioLevelID] : void 0;
 	const subtitleLevel = subtitleLevelID ? store$.value.levels.levels[subtitleLevelID] : void 0;
 	const playlist = videoLevel ? store$.value.playlists.playlists[videoLevel.playlistID] : null;
-	if (!videoLevel || !playlist) return of(jobsSlice.actions.downloadFailed({
+	console.log("[hls-debug] levels/download received", {
 		jobId,
-		message: "Unable to start download: playlist not found"
-	}));
+		levelID,
+		audioLevelID,
+		subtitleLevelID,
+		hasVideoLevel: Boolean(videoLevel),
+		hasAudioLevel: Boolean(audioLevel),
+		hasSubtitleLevel: Boolean(subtitleLevel),
+		hasPlaylist: Boolean(playlist)
+	});
+	if (!videoLevel || !playlist) return failedDownloadJobActions(jobId, playlist, videoLevel, "Unable to start download: playlist not found (the page may need a reload)");
 	const baseUri = videoLevel.playlistID;
 	const fetchAttempts = store$.value.config.fetchAttempts;
-	return from((async () => {
+	const keepAlive = setInterval(() => {
+		import_browser_polyfill.runtime.getPlatformInfo().catch(() => void 0);
+	}, 2e4);
+	return from(withTimeout((async () => {
 		const [videoFragments, audioFragments, subtitleText] = await Promise.all([
-			getFragmentsDetailsFactory(loader, parser)(videoLevel, fetchAttempts, { baseUri }),
-			audioLevel ? getFragmentsDetailsFactory(loader, parser)(audioLevel, fetchAttempts, { baseUri }) : Promise.resolve([]),
-			subtitleLevel ? Promise.race([getSubtitleTextFactory(loader, parser)(subtitleLevel, Math.min(fetchAttempts, 3), { baseUri }), new Promise((_, reject) => setTimeout(() => reject(new Error("Subtitle fetch timed out")), 2e4))]).catch((error) => {
+			getFragmentsDetailsFactory(loader, parser)(videoLevel, fetchAttempts, { baseUri }).then((fragments) => {
+				console.log("[hls-debug] video fragments", fragments.length);
+				return fragments;
+			}),
+			audioLevel ? getFragmentsDetailsFactory(loader, parser)(audioLevel, fetchAttempts, { baseUri }).then((fragments) => {
+				console.log("[hls-debug] audio fragments", fragments.length);
+				return fragments;
+			}) : Promise.resolve([]),
+			subtitleLevel ? withTimeout(getSubtitleTextFactory(loader, parser)(subtitleLevel, Math.min(fetchAttempts, 3), { baseUri }), 2e4, "Subtitle fetch timed out").then((text) => {
+				console.log("[hls-debug] subtitle text", text?.length ?? 0);
+				return text;
+			}).catch((error) => {
 				console.warn("[add-download-job] subtitle skipped:", error?.message);
 				return null;
 			}) : Promise.resolve(null)
@@ -3927,28 +3984,43 @@ var addDownloadJobEpic = (action$, store$, { loader, parser, fs }) => action$.pi
 				subtitleLevelId: subtitleLevel.id,
 				subtitleLength: subtitleText.length
 			});
-			await storeSubtitleTextFactory(fs)(jobId, subtitleLevel, playlist, subtitleText);
+			await withTimeout(storeSubtitleTextFactory(fs)(jobId, subtitleLevel, playlist, subtitleText), 1e4, "Storing subtitle text timed out").catch((error) => {
+				console.warn("[hls-debug] subtitle store skipped (re-tried before save):", error?.message);
+			});
 		}
+		if (videoFragments.length === 0) throw new Error("The selected stream has no segments");
+		console.log("[hls-debug] job ready", {
+			jobId,
+			videoFragments: videoFragments.length,
+			audioFragments: audioFragments.length,
+			container
+		});
 		return actions;
-	})()).pipe(mergeMap((acts) => of(...acts)), catchError((error) => of(jobsSlice.actions.downloadFailed({
-		jobId,
-		message: error?.message ?? "Failed to prepare download"
-	}))));
+	})(), 6e4, "Timed out preparing the download").finally(() => clearInterval(keepAlive))).pipe(mergeMap((acts) => of(...acts)), catchError((error) => failedDownloadJobActions(jobId, playlist, videoLevel, error?.message ?? "Failed to prepare download")));
 }));
 //#endregion
 //#region ../core/lib/controllers/save-as-job-epic.js
 var saveAsJobEpic = (action$, store$, { fs }) => action$.pipe(filter(jobsSlice.actions.saveAs.match), map((action) => action.payload.jobId), mergeMap((jobId) => {
 	const job = store$.value.jobs.jobs[jobId];
+	if (!job) return EMPTY;
 	const dialog = store$.value.config.saveDialog;
 	const container = job.outputContainer ?? (job.filename.toLowerCase().endsWith(".mkv") ? "mkv" : "mp4");
-	return (job?.subtitleText !== void 0 && job.subtitleText !== null ? from(fs.setSubtitleText(jobId, {
+	console.log("[hls-debug] saveAs start", {
+		jobId,
+		container,
+		hasSubtitle: job.subtitleText !== void 0 && job.subtitleText !== null
+	});
+	return (job?.subtitleText !== void 0 && job.subtitleText !== null ? from(withTimeout(fs.setSubtitleText(jobId, {
 		text: job.subtitleText,
 		language: job.subtitleLanguage,
 		name: job.subtitleName
-	})).pipe(map(() => {
+	}), 1e4, "Storing subtitle text timed out").then(() => true, (error) => {
+		console.warn("[hls-debug] subtitle re-store before save failed:", error?.message);
+		return false;
+	})).pipe(map((stored) => {
 		console.log("[subtitle] re-stored before save", {
 			jobId,
-			hasText: true,
+			hasText: stored,
 			language: job.subtitleLanguage
 		});
 		return null;
@@ -3989,7 +4061,7 @@ var downloadQueueEpic = (action$, store$) => action$.pipe(filter(shouldSchedule)
 	const limit = state.config.maxActiveDownloads ?? 0;
 	const jobs = state.jobs.jobs;
 	const jobsStatus = state.jobs.jobsStatus;
-	const queued = Object.keys(jobsStatus).filter((id) => jobsStatus[id]?.status === "queued").sort((a, b) => (jobs[a]?.createdAt ?? Number.MAX_SAFE_INTEGER) - (jobs[b]?.createdAt ?? Number.MAX_SAFE_INTEGER));
+	const queued = Object.keys(jobsStatus).filter((id) => jobsStatus[id]?.status === "queued" && !jobs[id]?.prepareFailed).sort((a, b) => (jobs[a]?.createdAt ?? Number.MAX_SAFE_INTEGER) - (jobs[b]?.createdAt ?? Number.MAX_SAFE_INTEGER));
 	const activeCount = Object.values(jobsStatus).filter((status) => status?.status === "downloading").length;
 	const available = limit <= 0 ? queued.length : Math.max(0, limit - activeCount);
 	if (available <= 0) return EMPTY;
@@ -4018,7 +4090,10 @@ var addPlaylistEpic = (action$, state$) => action$.pipe(filter(playlistsSlice.ac
 var deleteJobEpic = (action$, _store$, { fs }) => action$.pipe(filter(jobsSlice.actions.delete.match), map((action) => action.payload.jobId), mergeMap((jobId) => from(deleteBucketFactory(fs)(jobId)).pipe(catchError(() => of(null)), map(() => jobId))), mergeMap((jobId) => of(jobsSlice.actions.deleteSuccess({ jobId }))));
 //#endregion
 //#region ../core/lib/controllers/on-init.js
-var fsCleanupOnInitEpic = (action$, _store$, { fs }) => action$.pipe(ofType("init/start"), mergeMap(() => from(fsCleanupFactory(fs)())), mergeMap(() => of(createAction("init/done")())));
+var fsCleanupOnInitEpic = (action$, _store$, { fs }) => action$.pipe(ofType("init/start"), mergeMap(() => from(withTimeout(fsCleanupFactory(fs)(), 3e4, "Storage cleanup timed out")).pipe(catchError((error) => {
+	console.warn("[hls-debug] init cleanup failed", error?.message ?? error);
+	return of(null);
+}))), mergeMap(() => of(createAction("init/done")())));
 //#endregion
 //#region ../core/lib/controllers/cancel-job-delete-job-epic.js
 var cancelJobdeleteJobEpic = (action$, _store$, { fs }) => action$.pipe(filter(jobsSlice.actions.cancel.match), mergeMap(({ payload: { jobId } }) => of(jobsSlice.actions.delete({ jobId }))));
@@ -6027,10 +6102,14 @@ async function fetchWithRetry(fetchFn, attempts = 1) {
 	throw new Error("Fetch error");
 }
 async function fetchText(url, attempts = 1) {
-	const fetchFn = () => fetch(url).then((res) => {
-		if (!res.ok) throw new HttpError(res.status);
-		return res.text();
-	});
+	const fetchFn = () => {
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), 2e4);
+		return fetch(url, { signal: controller.signal }).then((res) => {
+			if (!res.ok) throw new HttpError(res.status);
+			return res.text();
+		}).finally(() => clearTimeout(timer));
+	};
 	return fetchWithRetry(fetchFn, attempts);
 }
 async function fetchArrayBuffer(url, attempts = 1, byteRange) {

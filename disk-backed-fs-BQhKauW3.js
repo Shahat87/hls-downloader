@@ -2173,18 +2173,28 @@ async function getBucketMeta(id) {
 	return (await loadBucketMetaCache())[id];
 }
 async function getSubtitlesDb() {
-	if (!subtitlesDbPromise) subtitlesDbPromise = openDB(SUBTITLE_DB_NAME, 1, { upgrade(db) {
-		db.createObjectStore(SUBTITLE_STORE_NAME, { keyPath: "id" });
-	} });
+	if (!subtitlesDbPromise) {
+		const opening = openDB(SUBTITLE_DB_NAME, 1, {
+			upgrade(db) {
+				db.createObjectStore(SUBTITLE_STORE_NAME, { keyPath: "id" });
+			},
+			blocking() {
+				opening.then((db) => db.close()).catch(() => void 0);
+				if (subtitlesDbPromise === opening) subtitlesDbPromise = null;
+			},
+			terminated() {
+				if (subtitlesDbPromise === opening) subtitlesDbPromise = null;
+			}
+		});
+		subtitlesDbPromise = opening;
+		opening.catch(() => {
+			if (subtitlesDbPromise === opening) subtitlesDbPromise = null;
+		});
+	}
 	return subtitlesDbPromise;
 }
 async function deleteSubtitlesDb() {
-	if (subtitlesDbPromise) try {
-		(await subtitlesDbPromise).close();
-	} finally {
-		subtitlesDbPromise = null;
-	}
-	await deleteDB(SUBTITLE_DB_NAME);
+	await (await getSubtitlesDb()).clear(SUBTITLE_STORE_NAME);
 }
 async function setSubtitleText(id, subtitle) {
 	await (await getSubtitlesDb()).put(SUBTITLE_STORE_NAME, {
@@ -2588,7 +2598,7 @@ var cleanup = async () => {
 	if (storageArea) await storageArea.set({ [BUCKET_META_KEY]: {} });
 	for (const id of Object.keys(buckets)) delete buckets[id];
 	FFmpegSingleton.terminate();
-	await deleteSubtitlesDb();
+	await deleteSubtitlesDb().catch((error) => console.warn("[hls-debug] subtitle store cleanup failed", error));
 };
 var createBucket = async (id, videoLength, audioLength) => {
 	await initializeStoragePolicy();
