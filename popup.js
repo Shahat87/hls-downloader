@@ -30409,6 +30409,7 @@ var configSlice = createSlice({
 		saveDialog: false,
 		fetchAttempts: 100,
 		preferredAudioLanguage: null,
+		preferredSubtitleLanguage: null,
 		maxActiveDownloads: 0,
 		autoDeleteAfterSave: false,
 		outputContainer: "mp4"
@@ -30425,6 +30426,9 @@ var configSlice = createSlice({
 		},
 		setPreferredAudioLanguage(state, action) {
 			state.preferredAudioLanguage = action.payload.preferredAudioLanguage;
+		},
+		setPreferredSubtitleLanguage(state, action) {
+			state.preferredSubtitleLanguage = action.payload.preferredSubtitleLanguage;
 		},
 		setMaxActiveDownloads(state, action) {
 			state.maxActiveDownloads = action.payload.maxActiveDownloads;
@@ -31529,7 +31533,7 @@ var OUTPUT_CONTAINER_OPTIONS = [{
 	value: "mkv",
 	label: "MKV"
 }];
-var SettingsView = ({ concurrency, fetchAttempts, saveDialog, autoDeleteAfterSave, outputContainer, onConcurrencyIncrease, onConcurrencyDecrease, onActiveDownloadsIncrease, onActiveDownloadsDecrease, onActiveDownloadsUnlimited, activeDownloadsUnlimited, maxActiveDownloads, onFetchAttemptsIncrease, onFetchAttemptsDecrease, onSaveDialogToggle, onAutoDeleteAfterSaveToggle, onSetOutputContainer, preferredAudioLanguage = "", onSetPreferredAudioLanguage, storage, onCleanupStorage, onRefreshStorage }) => {
+var SettingsView = ({ concurrency, fetchAttempts, saveDialog, autoDeleteAfterSave, outputContainer, onConcurrencyIncrease, onConcurrencyDecrease, onActiveDownloadsIncrease, onActiveDownloadsDecrease, onActiveDownloadsUnlimited, activeDownloadsUnlimited, maxActiveDownloads, onFetchAttemptsIncrease, onFetchAttemptsDecrease, onSaveDialogToggle, onAutoDeleteAfterSaveToggle, onSetOutputContainer, preferredAudioLanguage = "", onSetPreferredAudioLanguage, preferredSubtitleLanguage, onSetPreferredSubtitleLanguage, storage, onCleanupStorage, onRefreshStorage }) => {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "app-scrollbar h-full overflow-y-auto px-4 pb-6 pt-4",
 		children: [
@@ -31784,6 +31788,34 @@ var SettingsView = ({ concurrency, fetchAttempts, saveDialog, autoDeleteAfterSav
 								}, option.code))
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChevronDown, { className: "pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" })]
 						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Card, {
+						className: "gap-2.5 rounded-[11px] shadow-none",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex items-start justify-between gap-3",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "text-[12px] font-bold",
+								children: "Preferred subtitle language"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "max-w-[245px] text-right text-[10px] leading-relaxed text-muted-foreground",
+								children: "Used to auto-pick subtitles when available"
+							})]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "relative min-w-[240px] flex-1",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+								className: "h-9 w-full appearance-none rounded-[10px] border bg-background/80 px-3 pr-9 text-[11px] font-semibold text-foreground outline-none transition-[border-color,box-shadow] focus:border-primary/45 focus:ring-4 focus:ring-primary/10",
+								value: preferredSubtitleLanguage ?? "",
+								onChange: (e) => onSetPreferredSubtitleLanguage(e.target.value || null),
+								children: LANG_OPTIONS.map((option) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
+									value: option.code,
+									children: [
+										option.label,
+										" ",
+										option.code ? `(${option.code})` : ""
+									]
+								}, option.code))
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChevronDown, { className: "pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" })]
+						})]
 					})
 				]
 			})
@@ -31799,6 +31831,7 @@ var useSettingsController = () => {
 	const fetchAttempts = useSelector((state) => state.config.fetchAttempts);
 	const saveDialog = useSelector((state) => state.config.saveDialog);
 	const preferredAudioLanguage = useSelector((state) => state.config.preferredAudioLanguage);
+	const preferredSubtitleLanguage = useSelector((state) => state.config.preferredSubtitleLanguage ?? "");
 	const autoDeleteAfterSave = useSelector((state) => state.config.autoDeleteAfterSave);
 	const outputContainer = useSelector((state) => state.config.outputContainer ?? "mp4");
 	const activeDownloadsUnlimited = maxActiveDownloads === 0;
@@ -31833,6 +31866,10 @@ var useSettingsController = () => {
 		const normalized = (lang ?? "").trim();
 		dispatch(configSlice.actions.setPreferredAudioLanguage({ preferredAudioLanguage: normalized || null }));
 	}
+	function onSetPreferredSubtitleLanguage(lang) {
+		const normalized = (lang ?? "").trim();
+		dispatch(configSlice.actions.setPreferredSubtitleLanguage({ preferredSubtitleLanguage: normalized || null }));
+	}
 	function onSetOutputContainer(outputContainer) {
 		dispatch(configSlice.actions.setOutputContainer({ outputContainer }));
 	}
@@ -31854,14 +31891,14 @@ var useSettingsController = () => {
 		onSaveDialogToggle,
 		onAutoDeleteAfterSaveToggle,
 		preferredAudioLanguage,
-		onSetPreferredAudioLanguage,
+		onSetPreferredAudioLanguage, preferredSubtitleLanguage, onSetPreferredSubtitleLanguage,
 		onSetOutputContainer
 	};
 };
 //#endregion
 //#region src/modules/Settings/SettingsModule.tsx
 var SettingsModule = () => {
-	const { onConcurrencyDecrease, onConcurrencyIncrease, onFetchAttemptsDecrease, onFetchAttemptsIncrease, fetchAttempts, onSaveDialogToggle, onAutoDeleteAfterSaveToggle, saveDialog, autoDeleteAfterSave, concurrency, outputContainer, preferredAudioLanguage, onSetPreferredAudioLanguage, onSetOutputContainer, maxActiveDownloads, activeDownloadsUnlimited, onActiveDownloadsDecrease, onActiveDownloadsIncrease, onActiveDownloadsUnlimited } = useSettingsController();
+	const { onConcurrencyDecrease, onConcurrencyIncrease, onFetchAttemptsDecrease, onFetchAttemptsIncrease, fetchAttempts, onSaveDialogToggle, onAutoDeleteAfterSaveToggle, saveDialog, autoDeleteAfterSave, concurrency, outputContainer, preferredAudioLanguage, onSetPreferredAudioLanguage, preferredSubtitleLanguage, onSetPreferredSubtitleLanguage, onSetOutputContainer, maxActiveDownloads, activeDownloadsUnlimited, onActiveDownloadsDecrease, onActiveDownloadsIncrease, onActiveDownloadsUnlimited } = useSettingsController();
 	const { storage, startCleanup, refreshStorage } = useStorageInfo();
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsView, {
 		fetchAttempts,
@@ -31877,7 +31914,7 @@ var SettingsModule = () => {
 		outputContainer,
 		onSetOutputContainer,
 		preferredAudioLanguage,
-		onSetPreferredAudioLanguage,
+		onSetPreferredAudioLanguage, preferredSubtitleLanguage, onSetPreferredSubtitleLanguage,
 		maxActiveDownloads,
 		activeDownloadsUnlimited,
 		onActiveDownloadsDecrease,
@@ -60685,6 +60722,7 @@ var usePlaylistController = ({ id }) => {
 	const inspections = useSelector((state) => state.levelInspections);
 	const preferences = useSelector((state) => state.playlistPreferences);
 	const preferredAudioLanguage = useSelector((state) => state.config.preferredAudioLanguage);
+	const preferredSubtitleLanguage = useSelector((state) => state.config.preferredSubtitleLanguage ?? "");
 	return {
 		status,
 		levels: useSelector((state) => {
@@ -60703,6 +60741,7 @@ var usePlaylistController = ({ id }) => {
 		inspections,
 		preferences,
 		preferredAudioLanguage,
+		preferredSubtitleLanguage,
 		setAudioPreference: (0, import_react.useCallback)((levelID) => {
 			dispatch(playlistPreferencesSlice.actions.setAudioSelection({
 				playlistID: id,
@@ -60742,8 +60781,21 @@ function selectPreferredAudioLevel(audioLevels = [], preferredLanguage) {
 		return 0;
 	})[0]?.id;
 }
+function selectPreferredSubtitleLevel(subtitleLevels = [], preferredCode) {
+	if (!preferredCode || !subtitleLevels.length) return;
+	const option = LANG_OPTIONS.find((o) => o.code === preferredCode);
+	const label = (option?.label ?? "").toLowerCase();
+	const code = preferredCode.toLowerCase();
+	const matches = subtitleLevels.filter((l) => {
+		const lang = (l.language ?? "").toLowerCase();
+		const name = (l.name ?? "").toLowerCase();
+		return lang === code || lang === label || label && (name.startsWith(label) || lang.startsWith(label));
+	});
+	matches.sort((a, b) => (/auto/i.test(a.name ?? "") ? 1 : 0) - (/auto/i.test(b.name ?? "") ? 1 : 0));
+	return matches[0]?.id;
+}
 var PlaylistModule = ({ id, onBack }) => {
-	const { levels, status, downloadLevel, inspections, preferences, preferredAudioLanguage, setAudioPreference, setSubtitlePreference, inspectLevel } = usePlaylistController({ id });
+	const { levels, status, downloadLevel, inspections, preferences, preferredAudioLanguage, preferredSubtitleLanguage, setAudioPreference, setSubtitlePreference, inspectLevel } = usePlaylistController({ id });
 	const playlist = useSelector((state) => state.playlists.playlists[id] ?? null);
 	const [videoId, setVideoId] = (0, import_react.useState)();
 	const [audioId, setAudioId] = (0, import_react.useState)();
@@ -60782,14 +60834,20 @@ var PlaylistModule = ({ id, onBack }) => {
 	]);
 	(0, import_react.useEffect)(() => {
 		if (subtitleLevels.length > 0) {
-			if (storedSubtitleId !== void 0 && subtitleLevels.some((s) => s.id === storedSubtitleId)) setSubtitleId(storedSubtitleId);
+			const autoSubtitleId = storedSubtitleId === void 0 ? selectPreferredSubtitleLevel(subtitleLevels, preferredSubtitleLanguage) : void 0;
+			if (autoSubtitleId) {
+				setSubtitleId(autoSubtitleId);
+				setSubtitlePreference(autoSubtitleId);
+			} else if (storedSubtitleId !== void 0 && subtitleLevels.some((s) => s.id === storedSubtitleId)) setSubtitleId(storedSubtitleId);
 			else if (storedSubtitleId === "") setSubtitleId("");
 			else if (subtitleId && !subtitleLevels.some((s) => s.id === subtitleId)) setSubtitleId("");
 		} else if (subtitleId) setSubtitleId("");
 	}, [
 		subtitleLevels,
 		subtitleId,
-		storedSubtitleId
+		storedSubtitleId,
+		preferredSubtitleLanguage,
+		setSubtitlePreference
 	]);
 	(0, import_react.useEffect)(() => {
 		if (videoId && inspections.status[videoId] !== "pending" && !inspections.inspections[videoId]) inspectLevel(videoId);

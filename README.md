@@ -11,3 +11,7 @@ subtitles for JW Player streams (e.g. learn.corporatefinanceinstitute.com).
 
 ## Install
 `chrome://extensions` → Developer mode → Load unpacked → select this folder.
+
+## Also added
+- Settings → "Preferred subtitle language": auto-selects the matching subtitle track for new streams.
+- Subtitles are converted to WebVTT for muxing into the `.mkv`, and a separate `.srt` is saved next to the video.

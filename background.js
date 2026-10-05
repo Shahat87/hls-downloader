@@ -3134,6 +3134,7 @@ var initialConfigState$1 = {
 	saveDialog: false,
 	fetchAttempts: 100,
 	preferredAudioLanguage: null,
+	preferredSubtitleLanguage: null,
 	maxActiveDownloads: 0,
 	autoDeleteAfterSave: false,
 	outputContainer: "mp4"
@@ -3153,6 +3154,9 @@ var configSlice = createSlice({
 		},
 		setPreferredAudioLanguage(state, action) {
 			state.preferredAudioLanguage = action.payload.preferredAudioLanguage;
+		},
+		setPreferredSubtitleLanguage(state, action) {
+			state.preferredSubtitleLanguage = action.payload.preferredSubtitleLanguage;
 		},
 		setMaxActiveDownloads(state, action) {
 			state.maxActiveDownloads = action.payload.maxActiveDownloads;
@@ -3563,6 +3567,24 @@ var getFragmentsDetailsFactory = (loader, parser) => {
 var JW_MANIFEST_RE = /^https?:\/\/[^/]*(?:jwplatform|jwplayer|jwpsrv)\.com\/(?:v2\/)?manifests\/([A-Za-z0-9]+)\.m3u8/i;
 var DIRECT_SUBTITLE_RE = /(?:\.(?:srt|vtt|ttml|dfxp)(?:\?|$)|(?:jwplatform|jwplayer|jwpsrv)\.com\/tracks\/)/i;
 var isDirectSubtitleUri = (uri) => DIRECT_SUBTITLE_RE.test(uri || "");
+var vttToSrt = (text) => {
+	const blocks = String(text).replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").trim().split(/\n{2,}/);
+	let n = 0;
+	const out = [];
+	for (const block of blocks) {
+		const lines = block.split("\n");
+		const i = lines.findIndex((l) => l.includes("-->"));
+		if (i < 0) continue;
+		const time = lines[i].replace(/(\d{1,2}:)?(\d{2}):(\d{2})\.(\d{3})/g, (_m, h, mm, ss, ms) => (h ? h.padStart(3, "0") : "00:") + mm + ":" + ss + "," + ms).replace(/\s+(align|position|line|size|vertical):\S+/g, "");
+		out.push(++n + "\n" + time + "\n" + lines.slice(i + 1).join("\n"));
+	}
+	return out.join("\n\n") + "\n";
+};
+var toWebVtt = (text) => {
+	const clean = String(text).replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").trim();
+	if (/^WEBVTT/.test(clean)) return clean;
+	return "WEBVTT\n\n" + clean.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2");
+};
 async function addJwPlayerCaptions(masterText, masterUri, loader) {
 	const match = JW_MANIFEST_RE.exec(masterUri);
 	if (!match || /TYPE=SUBTITLES/.test(masterText)) return masterText;
@@ -3720,7 +3742,7 @@ var getSubtitleTextFactory = (loader, parser) => {
 			const { data: text } = await fetchWithFallback(primaryUri, primaryUri !== level.uri ? level.uri : options.baseUri ?? null, fetchAttempts, loader.fetchText);
 			parts.push(text.trim());
 		}
-		return parts.join("\n\n");
+		return isDirectSubtitleUri(level.uri) ? toWebVtt(parts.join("\n\n")) : parts.join("\n\n");
 	};
 	return run;
 };
@@ -3931,7 +3953,16 @@ var saveAsJobEpic = (action$, store$, { fs }) => action$.pipe(filter(jobsSlice.a
 		jobId,
 		progress,
 		message
-	}), { container }))), mergeMap((download) => from(saveAsFactory(fs)(job.filename, download, { dialog })).pipe(map(() => jobsSlice.actions.saveAsSuccess({ jobId: job.id })), catchError((error) => of(jobsSlice.actions.downloadFailed({
+	}), { container }))), mergeMap((download) => from((async () => {
+		await saveAsFactory(fs)(job.filename, download, { dialog });
+		if (job.subtitleText !== void 0 && job.subtitleText !== null) try {
+			const srtName = job.filename.replace(/\.[a-z0-9]+$/i, "") + ".srt";
+			const srtDownload = await fs.prepareTextDownload(vttToSrt(job.subtitleText), "application/x-subrip");
+			await fs.saveAs(srtName, srtDownload, { dialog });
+		} catch (srtError) {
+			console.error("[subtitle] separate .srt save failed", srtError);
+		}
+	})()).pipe(map(() => jobsSlice.actions.saveAsSuccess({ jobId: job.id })), catchError((error) => of(jobsSlice.actions.downloadFailed({
 		jobId,
 		message: error?.message || "Failed to finalize download (mux or save)"
 	}))))), catchError((error) => of(jobsSlice.actions.downloadFailed({
